@@ -1,0 +1,50 @@
+{
+	"name": "nats-consuming-gtfs-rt-server",
+	"description": "Reads DIFFERENTIAL-mode GTFS Realtime data from NATS message broker, and serves it as FULL_DATASET via HTTP.",
+	"version": "1.0.0",
+	"preferGlobal": true,
+	"type": "module",
+	"main": "index.js",
+	"bin": {
+		"send-vdv-453-data-to-nats": "./cli.js"
+	},
+	"files": [
+		"cli.js",
+		"index.js",
+		"lib"
+	],
+	"keywords": [
+		"vdv 453",
+		"vdv 454",
+		"realtime",
+		"public transport",
+		"transit",
+		"nats"
+	],
+	"author": "Verkehrsverbund Berlin Brandenburg <info@vbb.de>",
+	"contributors": [
+		"Jannis R <mail@jannisr.de>"
+	],
+	"homepage": "https://github.com/OpenDataVBB/nats-consuming-gtfs-rt-server",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/OpenDataVBB/nats-consuming-gtfs-rt-server.git"
+	},
+	"bugs": "https://github.com/OpenDataVBB/nats-consuming-gtfs-rt-server/issues",
+	"license": "ISC",
+	"engines": {
+		"node": ">=22"
+	},
+	"dependencies": {
+	},
+	"devDependencies": {
+		"@eslint/js": "^9.0.0",
+		"eslint": "^9.0.0",
+		"globals": "^15.0.0"
+	},
+	"scripts": {
+		"test": "./test/index.sh",
+		"lint": "eslint .",
+		"prepublishOnly": "npm run lint && npm test"
+	}
+}
