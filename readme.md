@@ -1,6 +1,6 @@
 # nats-consuming-gtfs-rt-server
 
-**Reads a continuous stream of [GTFS Realtime (GTFS-RT)](https://developers.google.com/transit/gtfs-realtime/) data with [`DIFFERENTIAL` incrementality](https://gtfs.org/documentation/realtime/reference/#enum-incrementality), converts it into a single [`FULL_DATASET`](https://gtfs.org/documentation/realtime/reference/#enum-incrementality) GTFS-RT feed, and serves it via HTTP.**
+**Reads a continuous stream of [GTFS Realtime (GTFS-RT)](https://developers.google.com/transit/gtfs-realtime/) data with [`DIFFERENTIAL` incrementality](https://gtfs.org/documentation/realtime/reference/#enum-incrementality) from [NATS](https://nats.io), converts it into a single [`FULL_DATASET`](https://gtfs.org/documentation/realtime/reference/#enum-incrementality) GTFS-RT feed, and serves it via HTTP.**
 
 ![ISC-licensed](https://img.shields.io/github/license/OpenDataVBB/nats-consuming-gtfs-rt-server.svg)
 
@@ -22,7 +22,16 @@ npm install -g OpenDataVBB/nats-consuming-gtfs-rt-server
 ## Usage
 
 ```
-todo
+Usage:
+    serve-gtfs-rt-from-nats [options]
+Options:
+	--nats-servers                NATS server(s) to connect to.
+	                              Default: $NATS_SERVERS
+	--nats-user                   User to use when authenticating with NATS server.
+	                              Default: $NATS_USER
+	--nats-client-name            Name identifying the NATS client among others.
+Examples:
+    serve-gtfs-rt-from-nats --nats-user foo
 ```
 
 
