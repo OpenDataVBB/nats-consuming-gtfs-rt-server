@@ -34,6 +34,9 @@ const {
 		'nats-client-name': {
 			type: 'string',
 		},
+		't0': {
+			type: 'string',
+		},
 	},
 	allowPositionals: true,
 })
@@ -51,6 +54,8 @@ Options:
 	                              Default: $NATS_USER
 	--nats-client-name            Name identifying the NATS client among others.
 	                              Default: ${NATS_CLIENT_NAME_PREFIX}\${randomHex(4)}
+	--t0                          UNIX timestamp to use as now, for debugging purposes.
+	                              Default: current UNIX timestamp
 Examples:
     serve-gtfs-rt-from-nats --port 1234 --nats-user foo
 \n`)
@@ -86,6 +91,10 @@ if ('nats-user' in flags) {
 }
 if ('nats-client-name' in flags) {
 	opt.natsOpts.name = flags['nats-client-name']
+}
+
+if ('t0' in flags) {
+	opt.t0 = parseInt(flags.t0)
 }
 
 const {

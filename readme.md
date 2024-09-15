@@ -36,6 +36,9 @@ Options:
 	--nats-user                   User to use when authenticating with NATS server.
 	                              Default: $NATS_USER
 	--nats-client-name            Name identifying the NATS client among others.
+	                              Default: vdv453-1-${randomHex(4)}
+	--t0                          UNIX timestamp to use as now, for debugging purposes.
+	                              Default: current UNIX timestamp
 Examples:
     serve-gtfs-rt-from-nats --port 1234 --nats-user foo
 ```
