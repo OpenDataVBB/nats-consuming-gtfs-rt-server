@@ -6,10 +6,25 @@ import throttle from 'lodash/throttle.js'
 import computeEtag from 'etag'
 import pick from 'lodash/pick.js'
 import serveBuffer from 'serve-buffer'
+import {
+	asyncConsume,
+	execPipe,
+	asyncMap,
+} from 'iter-tools'
+import {MAJOR_VERSION} from './lib/major-version.js'
 import {createLogger} from './lib/logger.js'
 import {
 	connectToNats,
+	AckPolicy as NatsAckPolicy,
+	DeliverPolicy as NatsDeliverPolicy,
 } from './lib/nats.js'
+
+// todo: DRY with OpenDataVBB/gtfs-rt-feed
+const NATS_JETSTREAM_GTFSRT_STREAM_NAME = `GTFS_RT_${MAJOR_VERSION}`
+
+// todo: DRY with OpenDataVBB/gtfs-rt-feed
+// https://github.com/OpenDataVBB/gtfs-rt-feed/blob/9bcc8e46945107e1a96d65f612df72c1404d2818/lib/gtfs-rt-mqtt-topics.js#L11
+const GTFS_RT_TOPIC_PREFIX = 'gtfsrt.'
 
 const respondToHealthcheck = (req, res, isHealthy) => {
 	res.setHeader('cache-control', 'no-store')
@@ -33,14 +48,27 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 
 	const {
 		natsOpts,
+		natsConsumerDurableName,
+		natsConsumerTtl,
+		// shiftTimesToEnsureGaps: shouldShiftTimesToEnsureGaps,
 	} = {
 		natsOpts: {},
+		natsConsumerDurableName: process.env.MATCHING_CONSUMER_DURABLE_NAME
+			? process.env.MATCHING_CONSUMER_DURABLE_NAME
+			: NATS_JETSTREAM_GTFSRT_STREAM_NAME + '_' + Math.random().toString(16).slice(2, 6),
+		natsConsumerTtl: 10 * 60 * 1000, // 10 minutes
+		// shiftTimesToEnsureGaps: false,
 		...opt,
 	}
+	ok(Number.isInteger(natsConsumerTtl), 'opt.natsConsumerTtl must be an integer')
 
 	// todo: DRY with lib/serve.js in derhuerst/hafas-gtfs-rt-feed
 
 	const logger = createLogger('nats-consuming-gtfs-rt-server')
+	const abortWithError = (err) => {
+		logger.error(err)
+		process.exit(1)
+	}
 
 	// todo: pass in feed metadata, see https://github.com/google/transit/pull/434
 	const differentialToFull = differentialToFullDataset({
@@ -116,6 +144,53 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		logger,
 	}, natsOpts)
 	// todo: warn-log publish failures?
+
+	const onNatsMsg = (msg) => {
+		// todo: trace-log msg
+
+		const tripUpdate = msg.json(msg.data)
+		processTripUpdate(tripUpdate)
+
+		msg.ack()
+	}
+
+	{
+		const natsJetstreamManager = await natsClient.jetstreamManager()
+		const natsJetstreamClient = await natsClient.jetstream()
+
+		{
+			// create/update NATS JetStream stream for GTFS-RT data
+			const streamInfo = await natsJetstreamManager.streams.add({
+				name: NATS_JETSTREAM_GTFSRT_STREAM_NAME,
+				subjects: [
+					GTFS_RT_TOPIC_PREFIX + '>',
+				],
+				// todo: limits?
+			})
+			logger.debug({
+				streamInfo,
+			}, 'created/re-used NATS JetStream stream')
+		}
+
+		// create durable NATS JetStream consumer for GTFS-RT stream
+		const consumerInfo = await natsJetstreamManager.consumers.add(NATS_JETSTREAM_GTFSRT_STREAM_NAME, {
+			ack_policy: NatsAckPolicy.Explicit,
+			durable_name: natsConsumerDurableName,
+			deliver_policy: NatsDeliverPolicy.New,
+			inactive_threshold: natsConsumerTtl,
+		})
+		logger.debug({
+			consumerInfo,
+		}, 'created/re-used NATS JetStream consumer')
+
+		const tripUpdatesConsumer = await natsJetstreamClient.consumers.get(NATS_JETSTREAM_GTFSRT_STREAM_NAME, consumerInfo.name)
+		const tripUpdatesSub = await tripUpdatesConsumer.consume()
+		execPipe(
+			tripUpdatesSub,
+			asyncMap(onNatsMsg),
+			asyncConsume,
+		).catch(abortWithError)
+	}
 
 	const httpServer = createServer(onRequest)
 	await new Promise((resolve, reject) => {

@@ -38,6 +38,7 @@
 	"dependencies": {
 		"etag": "^1.8.1",
 		"gtfs-rt-differential-to-full-dataset": "^2.1.0",
+		"iter-tools": "^7.5.3",
 		"lodash": "^4.17.21",
 		"nats": "^2.28.2",
 		"pino": "^9.4.0",
