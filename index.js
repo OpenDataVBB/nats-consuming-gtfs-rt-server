@@ -130,7 +130,10 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		serveBuffer(req, res, feed, {
 			timeModified,
 			etag,
+			gzipMaxSize: 10 * 1024 * 1024, // 10mb
+			brotliCompressMaxSize: 2 * 1024 * 1024, // 2mb
 			zstdCompress: true,
+			zstdCompressMaxSize: 50 * 1024 * 1024, // 50mb
 			unmutatedBuffers: true,
 			onCompressed: onFeedCompressed,
 		})
