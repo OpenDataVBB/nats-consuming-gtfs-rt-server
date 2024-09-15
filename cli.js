@@ -54,6 +54,9 @@ Options:
 	                              Default: $NATS_USER
 	--nats-client-name            Name identifying the NATS client among others.
 	                              Default: ${NATS_CLIENT_NAME_PREFIX}\${randomHex(4)}
+	--diff-entities-ttl           Time to keep DIFFERENTIAL-mode GTFS-RT FeedEntities
+	                              in the combined FULL_DATASET-mode feed for, in seconds.
+	                              Default: 10 minutes
 	--t0                          UNIX timestamp to use as now, for debugging purposes.
 	                              Default: current UNIX timestamp
 Examples:
@@ -95,6 +98,10 @@ if ('nats-client-name' in flags) {
 
 if ('t0' in flags) {
 	opt.t0 = parseInt(flags.t0)
+}
+
+if ('diff-entities-ttl' in flags) {
+	opt.differentialEntitiesTtl = parseInt(flags['diff-entities-ttl'])
 }
 
 const {

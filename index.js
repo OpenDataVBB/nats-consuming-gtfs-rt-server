@@ -62,6 +62,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		natsConsumerDurableName,
 		natsConsumerTtl,
 		// shiftTimesToEnsureGaps: shouldShiftTimesToEnsureGaps,
+		differentialEntitiesTtl,
 		t0,
 	} = {
 		natsOpts: {},
@@ -70,10 +71,14 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 			: NATS_JETSTREAM_GTFSRT_STREAM_NAME + '_' + Math.random().toString(16).slice(2, 6),
 		natsConsumerTtl: 10 * 60 * 1000, // 10 minutes
 		// shiftTimesToEnsureGaps: false,
+		differentialEntitiesTtl: process.env.GTFS_RT_DIFFERENTIAL_ENTITIES_TTL
+			? process.env.GTFS_RT_DIFFERENTIAL_ENTITIES_TTL
+			: 10 * 60 * 1000, // 10m
 		t0: Date.now() / 1000 | 0,
 		...opt,
 	}
 	ok(Number.isInteger(natsConsumerTtl), 'opt.natsConsumerTtl must be an integer')
+	ok(Number.isInteger(differentialEntitiesTtl), 'opt.differentialEntitiesTtl must be an integer')
 	ok(Number.isInteger(t0), 'opt.t0 must be an integer')
 
 	// todo: DRY with lib/serve.js in derhuerst/hafas-gtfs-rt-feed
@@ -110,7 +115,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 	const timeStarted = Date.now()
 	// todo: pass in feed metadata, see https://github.com/google/transit/pull/434
 	const differentialToFull = gtfsRtDifferentialToFullDataset({
-		ttl: 5 * 60 * 1000, // 5m
+		ttl: differentialEntitiesTtl,
 		// todo: debug-log when entities have already expired while being added
 		timestamp: () => {
 			const timePassed = (Date.now() - timeStarted) / 1000 | 0

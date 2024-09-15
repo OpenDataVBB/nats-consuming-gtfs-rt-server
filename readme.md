@@ -37,6 +37,9 @@ Options:
 	                              Default: $NATS_USER
 	--nats-client-name            Name identifying the NATS client among others.
 	                              Default: vdv453-1-${randomHex(4)}
+	--diff-entities-ttl           Time to keep DIFFERENTIAL-mode GTFS-RT FeedEntities
+	                              in the combined FULL_DATASET-mode feed for, in seconds.
+	                              Default: 10 minutes
 	--t0                          UNIX timestamp to use as now, for debugging purposes.
 	                              Default: current UNIX timestamp
 Examples:
