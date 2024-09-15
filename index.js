@@ -1,7 +1,9 @@
 import {ok} from 'node:assert'
 import {createServer} from 'node:http'
 import {Counter, Summary, Gauge} from 'prom-client'
-import differentialToFullDataset from 'gtfs-rt-differential-to-full-dataset'
+import {
+	gtfsRtDifferentialToFullDataset,
+} from 'gtfs-rt-differential-to-full-dataset'
 import {performance} from 'node:perf_hooks'
 import throttle from 'lodash/throttle.js'
 import computeEtag from 'etag'
@@ -27,6 +29,13 @@ const NATS_JETSTREAM_GTFSRT_STREAM_NAME = `GTFS_RT_${MAJOR_VERSION}`
 // todo: DRY with OpenDataVBB/gtfs-rt-feed
 // https://github.com/OpenDataVBB/gtfs-rt-feed/blob/9bcc8e46945107e1a96d65f612df72c1404d2818/lib/gtfs-rt-mqtt-topics.js#L11
 const GTFS_RT_TOPIC_PREFIX = 'gtfsrt.'
+
+// > enum Incrementality {
+// > 	FULL_DATASET = 0;
+// > 	DIFFERENTIAL = 1;
+// > }
+// https://gtfs.org/documentation/realtime/proto/
+const INCREMENTALITY_DIFFERENTIAL = 1
 
 const respondToHealthcheck = (req, res, isHealthy) => {
 	res.setHeader('cache-control', 'no-store')
@@ -96,7 +105,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 	})
 
 	// todo: pass in feed metadata, see https://github.com/google/transit/pull/434
-	const differentialToFull = differentialToFullDataset({
+	const differentialToFull = gtfsRtDifferentialToFullDataset({
 		ttl: 5 * 60 * 1000, // 5m
 	})
 
@@ -106,7 +115,14 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 			id: String(t0 + performance.now()),
 			trip_update: tripUpdate,
 		}
-		differentialToFull.write(feedEntity)
+		const feedMessage = {
+			header: {
+				gtfs_realtime_version: '2.0',
+				incrementality: INCREMENTALITY_DIFFERENTIAL,
+			},
+			entity: [feedEntity],
+		}
+		differentialToFull.write(feedMessage)
 		updateFeed()
 	}
 
