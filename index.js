@@ -219,7 +219,8 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 			ack_policy: NatsAckPolicy.Explicit,
 			durable_name: natsConsumerDurableName,
 			deliver_policy: NatsDeliverPolicy.New,
-			inactive_threshold: natsConsumerTtl,
+			// todo: this makes the consumer stop receiving new messages after a short time 🤔
+			// inactive_threshold: natsConsumerTtl,
 		})
 		logger.debug({
 			consumerInfo,
