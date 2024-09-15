@@ -29,13 +29,15 @@ npm install -g OpenDataVBB/nats-consuming-gtfs-rt-server
 Usage:
     serve-gtfs-rt-from-nats [options]
 Options:
+	--port                    -p  Port to serve the GTFS Realtime feed on.
+	                              Default: $PORT, otherwise 3000
 	--nats-servers                NATS server(s) to connect to.
 	                              Default: $NATS_SERVERS
 	--nats-user                   User to use when authenticating with NATS server.
 	                              Default: $NATS_USER
 	--nats-client-name            Name identifying the NATS client among others.
 Examples:
-    serve-gtfs-rt-from-nats --nats-user foo
+    serve-gtfs-rt-from-nats --port 1234 --nats-user foo
 ```
 
 

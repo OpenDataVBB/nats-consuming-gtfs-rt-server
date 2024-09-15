@@ -21,6 +21,10 @@ const {
 			type: 'boolean',
 			short: 'v',
 		},
+		'port': {
+			type: 'string',
+			short: 'p',
+		},
 		'nats-servers': {
 			type: 'string',
 		},
@@ -39,6 +43,8 @@ if (flags.help) {
 Usage:
     serve-gtfs-rt-from-nats [options]
 Options:
+	--port                    -p  Port to serve the GTFS Realtime feed on.
+	                              Default: $PORT, otherwise 3000
 	--nats-servers                NATS server(s) to connect to.
 	                              Default: $NATS_SERVERS
 	--nats-user                   User to use when authenticating with NATS server.
@@ -46,7 +52,7 @@ Options:
 	--nats-client-name            Name identifying the NATS client among others.
 	                              Default: ${NATS_CLIENT_NAME_PREFIX}\${randomHex(4)}
 Examples:
-    serve-gtfs-rt-from-nats --nats-user foo
+    serve-gtfs-rt-from-nats --port 1234 --nats-user foo
 \n`)
 	process.exit(0)
 }
@@ -62,6 +68,14 @@ import {withSoftExit} from './lib/soft-exit.js'
 const cfg = {}
 const opt = {
 	natsOpts: {},
+}
+
+if ('port' in flags) {
+	cfg.port = parseInt(flags.port)
+} else if ('PORT' in process.env) {
+	cfg.port = parseInt(process.env.PORT)
+} else {
+	cfg.port = 3000
 }
 
 if ('nats-servers' in flags) {
