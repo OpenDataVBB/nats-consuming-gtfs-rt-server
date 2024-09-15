@@ -1,5 +1,6 @@
 import {ok} from 'node:assert'
 import {createServer} from 'node:http'
+import {Counter, Summary, Gauge} from 'prom-client'
 import differentialToFullDataset from 'gtfs-rt-differential-to-full-dataset'
 import {performance} from 'node:perf_hooks'
 import throttle from 'lodash/throttle.js'
@@ -13,6 +14,7 @@ import {
 } from 'iter-tools'
 import {MAJOR_VERSION} from './lib/major-version.js'
 import {createLogger} from './lib/logger.js'
+import {createMetricsServer, register as metricsRegister} from './lib/metrics.js'
 import {
 	connectToNats,
 	AckPolicy as NatsAckPolicy,
@@ -70,6 +72,29 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		process.exit(1)
 	}
 
+	const receivedFromNatsTotal = new Counter({
+		name: 'received_from_nats_total',
+		help: 'no. of TripUpdates received from NATS',
+		registers: [metricsRegister],
+	})
+	const digestTime = new Summary({
+		name: 'digest_time_seconds',
+		help: 'time needed to add a TripUpdate into the GTFS-RT feed',
+		registers: [metricsRegister],
+	})
+	const feedSize = new Gauge({
+		name: 'feed_size_raw_bytes',
+		help: 'size of the final GTFS-RT feed',
+		registers: [metricsRegister],
+		labelNames: ['compression'],
+	})
+	const feedRequestsTotal = new Gauge({
+		name: 'feed_requests_total',
+		help: 'how often the GTFS-RT feed has been HTTP-requested',
+		registers: [metricsRegister],
+		// todo: by compression method?
+	})
+
 	// todo: pass in feed metadata, see https://github.com/google/transit/pull/434
 	const differentialToFull = differentialToFullDataset({
 		ttl: 5 * 60 * 1000, // 5m
@@ -91,17 +116,23 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 	const updateFeed = throttle(() => {
 		feed = differentialToFull.asFeedMessage()
 		timeModified = new Date()
+		feedSize.set({compression: 'none'}, feed.length)
 		etag = computeEtag(feed) // todo: add computation time as metric
 	}, 100)
 	differentialToFull.on('change', updateFeed)
 	setImmediate(updateFeed)
 
+	const onFeedCompressed = (compression, compressedFeed, _) => {
+		feedSize.set({compression}, compressedFeed.length)
+	}
 	const respondWithFeed = (req, res) => {
+		feedRequestsTotal.inc()
 		serveBuffer(req, res, feed, {
 			timeModified,
 			etag,
 			zstdCompress: true,
 			unmutatedBuffers: true,
+			onCompressed: onFeedCompressed,
 		})
 	}
 
@@ -138,6 +169,10 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		}
 	}
 
+	const metricsServer = createMetricsServer()
+	await metricsServer.start()
+	logger.info(`serving Prometheus metrics on port ${metricsServer.address().port}`)
+
 	const {
 		natsClient,
 	} = await connectToNats({
@@ -147,11 +182,15 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 
 	const onNatsMsg = (msg) => {
 		// todo: trace-log msg
+		receivedFromNatsTotal.inc()
+		const t0 = performance.now()
 
 		const tripUpdate = msg.json(msg.data)
 		processTripUpdate(tripUpdate)
 
+		const processingTime = performance.now() - t0
 		msg.ack()
+		digestTime.observe(processingTime / 1000)
 	}
 
 	{
@@ -202,6 +241,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 	logger.info(`serving GTFS-RT feed on port ${port}`)
 
 	const stop = async () => {
+		metricsServer.close()
 		await natsClient.close()
 		httpServer.close()
 	}
