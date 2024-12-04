@@ -17,18 +17,10 @@ import {
 import {MAJOR_VERSION} from './lib/major-version.js'
 import {createLogger} from './lib/logger.js'
 import {createMetricsServer, register as metricsRegister} from './lib/metrics.js'
-import {
-	connectToNats,
-	AckPolicy as NatsAckPolicy,
-	DeliverPolicy as NatsDeliverPolicy,
-} from './lib/nats.js'
+import {connectToNats} from './lib/nats.js'
 
 // todo: DRY with OpenDataVBB/gtfs-rt-feed
 const NATS_JETSTREAM_GTFSRT_STREAM_NAME = `GTFS_RT_${MAJOR_VERSION}`
-
-// todo: DRY with OpenDataVBB/gtfs-rt-feed
-// https://github.com/OpenDataVBB/gtfs-rt-feed/blob/9bcc8e46945107e1a96d65f612df72c1404d2818/lib/gtfs-rt-mqtt-topics.js#L11
-const GTFS_RT_TOPIC_PREFIX = 'gtfsrt.'
 
 // > enum Incrementality {
 // > 	FULL_DATASET = 0;
@@ -59,17 +51,15 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 
 	const {
 		natsOpts,
-		natsConsumerDurableName,
-		natsConsumerTtl,
+		natsConsumerName,
 		// shiftTimesToEnsureGaps: shouldShiftTimesToEnsureGaps,
 		differentialEntitiesTtl,
 		t0,
 	} = {
 		natsOpts: {},
-		natsConsumerDurableName: process.env.MATCHING_CONSUMER_DURABLE_NAME
-			? process.env.MATCHING_CONSUMER_DURABLE_NAME
-			: NATS_JETSTREAM_GTFSRT_STREAM_NAME + '_' + Math.random().toString(16).slice(2, 6),
-		natsConsumerTtl: 10 * 60 * 1000, // 10 minutes
+		natsConsumerName: process.env.GTFS_RT_CONSUMER_NAME
+			? process.env.GTFS_RT_CONSUMER_NAME
+			: 'nats-consuming-gtfs-rt-server',
 		// shiftTimesToEnsureGaps: false,
 		differentialEntitiesTtl: process.env.GTFS_RT_DIFFERENTIAL_ENTITIES_TTL
 			? process.env.GTFS_RT_DIFFERENTIAL_ENTITIES_TTL
@@ -77,7 +67,6 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		t0: Date.now() / 1000 | 0,
 		...opt,
 	}
-	ok(Number.isInteger(natsConsumerTtl), 'opt.natsConsumerTtl must be an integer')
 	ok(Number.isInteger(differentialEntitiesTtl), 'opt.differentialEntitiesTtl must be an integer')
 	ok(Number.isInteger(t0), 'opt.t0 must be an integer')
 
@@ -291,39 +280,33 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 	}
 
 	{
-		const natsJetstreamManager = await natsClient.jetstreamManager()
 		const natsJetstreamClient = await natsClient.jetstream()
 
 		{
-			// create/update NATS JetStream stream for GTFS-RT data
-			const streamInfo = await natsJetstreamManager.streams.add({
-				name: NATS_JETSTREAM_GTFSRT_STREAM_NAME,
-				subjects: [
-					GTFS_RT_TOPIC_PREFIX + '>',
-				],
-				// todo: limits?
-			})
+			// query details of the (externally created) NATS JetStream stream for AUS IstFahrts
+			const stream = await natsJetstreamClient.streams.get(NATS_JETSTREAM_GTFSRT_STREAM_NAME)
+			const streamInfo = await stream.info()
 			logger.debug({
 				streamInfo,
-			}, 'created/re-used NATS JetStream stream')
+			}, 'using NATS JetStream stream for GTFS-RT feedEntities')
 		}
 
-		// create durable NATS JetStream consumer for GTFS-RT stream
-		const consumerInfo = await natsJetstreamManager.consumers.add(NATS_JETSTREAM_GTFSRT_STREAM_NAME, {
-			ack_policy: NatsAckPolicy.Explicit,
-			durable_name: natsConsumerDurableName,
-			deliver_policy: NatsDeliverPolicy.New,
-			// todo: this makes the consumer stop receiving new messages after a short time 🤔
-			// inactive_threshold: natsConsumerTtl,
-		})
-		logger.debug({
-			consumerInfo,
-		}, 'created/re-used NATS JetStream consumer')
+		const gtfsRtConsumer = await natsJetstreamClient.consumers.get(
+			NATS_JETSTREAM_GTFSRT_STREAM_NAME,
+			natsConsumerName,
+		)
 
-		const tripUpdatesConsumer = await natsJetstreamClient.consumers.get(NATS_JETSTREAM_GTFSRT_STREAM_NAME, consumerInfo.name)
-		const tripUpdatesSub = await tripUpdatesConsumer.consume()
+		{
+			// query details of the (externally created) NATS JetStream consumer
+			const consumerInfo = await gtfsRtConsumer.info()
+			logger.debug({
+				consumerInfo,
+			}, 'using NATS JetStream consumer')
+		}
+
+		const gtfsRtSub = await gtfsRtConsumer.consume()
 		execPipe(
-			tripUpdatesSub,
+			gtfsRtSub,
 			asyncMap(onNatsMsg),
 			asyncConsume,
 		).catch(abortWithError)

@@ -37,6 +37,10 @@ Options:
 	                              Default: $NATS_USER
 	--nats-client-name            Name identifying the NATS client among others.
 	                              Default: vdv453-1-${randomHex(4)}
+	--nats-consumer-name          Name of the NATS JetStream consumer on the
+	                              GTFS_RT_2 stream.
+	                              Default: $GTFS_RT_CONSUMER_NAME, otherwise `nats-
+	                              consuming-gtfs-rt-server`
 	--diff-entities-ttl           Time to keep DIFFERENTIAL-mode GTFS-RT FeedEntities
 	                              in the combined FULL_DATASET-mode feed for, in seconds.
 	                              Default: 10 minutes
@@ -44,6 +48,53 @@ Options:
 	                              Default: current UNIX timestamp
 Examples:
     serve-gtfs-rt-from-nats --port 1234 --nats-user foo
+```
+
+### create NATS stream & consumer
+
+Before running `nats-consuming-gtfs-rt-server`, you must create a [NATS JetStream](https://docs.nats.io/nats-concepts/jetstream) [stream](https://docs.nats.io/nats-concepts/jetstream/streams) called `GTFS_RT_2` holding the `FeedEntity` GTFS-RT messages. This can be done using the [NATS CLI](https://github.com/nats-io/natscli):
+
+
+```shell
+nats stream add \
+	# omit this if you want to configure more details
+	--defaults \
+	# collect all messages published to these subjects
+	--subjects='gtfsrt.>' \
+	# acknowledge publishes
+	--ack \
+	# with limited storage, discard the oldest limits first
+	--retention=limits --discard=old \
+	--description='GTFS-Realtime FeedEntity messages' \
+	# name of the stream
+	GTFS_RT_2
+```
+
+On the `GTFS_RT_2` stream, you must also create a durable [consumer](https://docs.nats.io/nats-concepts/jetstream/consumers):
+
+```shell
+nats consumer add \
+	# omit this if you want to configure more details
+	--defaults \
+	# create a pull-based consumer (refer to the NATS JetStream docs)
+	--pull \
+	# let gtfs-rt-feed explicitly acknowledge all received messages
+	--ack=explicit \
+	# let the newly created consumer start with the latest messages in GTFS_RT_2 (not all)
+	--deliver=new \
+	# send gtfs-rt-feed at most 200 messages at once
+	--max-pending=500 \
+	# when & how often to re-deliver a message that hasn't been acknowledged (usually because it couldn't be processed)
+	--max-deliver=3 \
+	--backoff=linear \
+	--backoff-steps=2 \
+	--backoff-min=15s \
+	--backoff-max=1m \
+	--description 'OpenDataVBB/nats-consuming-gtfs-rt-server' \
+	# name of the stream
+	GTFS_RT_2 \
+	# name of the consumer
+	nats-consuming-gtfs-rt-server
 ```
 
 

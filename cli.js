@@ -34,6 +34,9 @@ const {
 		'nats-client-name': {
 			type: 'string',
 		},
+		'nats-consumer-name': {
+			type: 'string',
+		},
 		't0': {
 			type: 'string',
 		},
@@ -54,6 +57,10 @@ Options:
 	                              Default: $NATS_USER
 	--nats-client-name            Name identifying the NATS client among others.
 	                              Default: ${NATS_CLIENT_NAME_PREFIX}\${randomHex(4)}
+	--nats-consumer-name          Name of the NATS JetStream consumer on the
+	                              GTFS_RT_2 stream.
+	                              Default: $GTFS_RT_CONSUMER_NAME, otherwise \`nats-
+	                              consuming-gtfs-rt-server\`
 	--diff-entities-ttl           Time to keep DIFFERENTIAL-mode GTFS-RT FeedEntities
 	                              in the combined FULL_DATASET-mode feed for, in seconds.
 	                              Default: 10 minutes
