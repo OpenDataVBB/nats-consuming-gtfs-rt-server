@@ -1,6 +1,6 @@
 # nats-consuming-gtfs-rt-server
 
-**Reads a continuous stream of [GTFS Realtime (GTFS-RT)](https://developers.google.com/transit/gtfs-realtime/) data with [`DIFFERENTIAL` incrementality](https://gtfs.org/documentation/realtime/reference/#enum-incrementality) from [NATS](https://nats.io), converts it into a single [`FULL_DATASET`](https://gtfs.org/documentation/realtime/reference/#enum-incrementality) GTFS-RT feed, and serves it via HTTP.**
+**Reads a continuous stream of [GTFS Realtime (GTFS-RT)](https://gtfs.org/documentation/realtime/reference/) data with [`DIFFERENTIAL` incrementality](https://gtfs.org/documentation/realtime/reference/#enum-incrementality) from [NATS](https://nats.io), converts it into a single [`FULL_DATASET`](https://gtfs.org/documentation/realtime/reference/#enum-incrementality) GTFS-RT feed, and serves it via HTTP.**
 
 Note from [`gtfs-rt-differential-to-full-dataset`](https://github.com/derhuerst/gtfs-rt-differential-to-full-dataset), which is used for the conversion:
 
