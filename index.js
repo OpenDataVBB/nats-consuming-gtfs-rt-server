@@ -128,6 +128,11 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		registers: [metricsRegister],
 		labelNames: ['compression'],
 	})
+	const feedEntitiesTotal = new Gauge({
+		name: 'feed_entities_total',
+		help: 'number of entities in the feed',
+		registers: [metricsRegister],
+	})
 	const feedRequestsTotal = new Gauge({
 		name: 'feed_requests_total',
 		help: 'how often the GTFS-RT feed has been HTTP-requested',
@@ -169,6 +174,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		feed = differentialToFull.asFeedMessage()
 		timeModified = new Date()
 		feedSize.set({compression: 'none'}, feed.length)
+		feedEntitiesTotal.set(differentialToFull.nrOfEntities())
 		etag = computeEtag(feed) // todo: add computation time as metric
 	}, 100)
 	differentialToFull.on('change', updateFeed)
