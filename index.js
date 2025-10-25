@@ -82,6 +82,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 	if (scheduleFeedSha256 !== null) {
 		strictEqual(typeof scheduleFeedSha256, 'string', 'opt.scheduleFeedSha256 must be a string')
 		ok(scheduleFeedSha256, 'opt.scheduleFeedSha256 must not be empty')
+		ok(/^[0-9a-f]+$/.test(scheduleFeedSha256), 'opt.scheduleFeedSha256 must be hex only')
 	}
 	ok(Number.isInteger(differentialEntitiesTtl), 'opt.differentialEntitiesTtl must be an integer')
 	ok(Number.isInteger(t0), 'opt.t0 must be an integer')
@@ -101,6 +102,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		help: 'number of messages received from NATS',
 		registers: [metricsRegister],
 		labelNames: [
+			'feed_digest', // first byte of the SHA256 digest
 			'stream', // name of the JetStream stream
 			'consumer', // name of the JetStream consumer
 			'topic_root', // first "segment" of the topic, e.g. `AUS` with `aus.istfahrt.foo.bar`
@@ -112,6 +114,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		help: 'when the latest message has been received from NATS',
 		registers: [metricsRegister],
 		labelNames: [
+			'feed_digest', // first byte of the SHA256 digest
 			'stream', // name of the JetStream stream
 			'consumer', // name of the JetStream consumer
 			'topic_root', // first "segment" of the topic, e.g. `AUS` with `aus.istfahrt.foo.bar`
@@ -125,36 +128,62 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		name: 'nats_msg_seq',
 		help: 'sequence number of the latest NATS message being processed',
 		registers: [metricsRegister],
+		labelNames: [
+			'feed_digest', // first byte of the SHA256 digest
+		],
 	})
 	// todo [breaking]: remove in favor of `nats_nr_of_msgs_received_total`
 	const receivedFromNatsTotal = new Counter({
 		name: 'received_from_nats_total',
 		help: 'no. of TripUpdates received from NATS',
 		registers: [metricsRegister],
+		labelNames: [
+			'feed_digest', // first byte of the SHA256 digest
+		],
 	})
 
 	const digestTime = new Summary({
 		name: 'digest_time_seconds',
 		help: 'time needed to add a TripUpdate into the GTFS-RT feed',
 		registers: [metricsRegister],
+		labelNames: [
+			'feed_digest', // first byte of the SHA256 digest
+		],
 	})
 	const feedSize = new Gauge({
 		name: 'feed_size_raw_bytes',
 		help: 'size of the final GTFS-RT feed',
 		registers: [metricsRegister],
-		labelNames: ['compression'],
+		labelNames: [
+			'feed_digest', // first byte of the SHA256 digest
+			'compression',
+		],
 	})
 	const feedEntitiesTotal = new Gauge({
 		name: 'feed_entities_total',
 		help: 'number of entities in the feed',
 		registers: [metricsRegister],
+		labelNames: [
+			'feed_digest', // first byte of the SHA256 digest
+			// todo: by hash(route_name)?
+		],
 	})
 	const feedRequestsTotal = new Gauge({
 		name: 'feed_requests_total',
 		help: 'how often the GTFS-RT feed has been HTTP-requested',
 		registers: [metricsRegister],
-		// todo: by compression method?
+		labelNames: [
+			'feed_digest', // first byte of the SHA256 digest
+			// todo: by compression method?
+		],
 	})
+
+	const metricsBaseLabels = {}
+	if (scheduleFeedSha256 !== null) {
+		// Note: Prometheus stores time series per combination of label values, so having labels with a high or even unbound cardinality is a problem. We still want to be able to tell the schedule databases' metrics apart in the monitoring system, so we add the first hex digit (with a cardinality of 16) of the GTFS Schedule feed's hash as a label.
+		// see also https://www.robustperception.io/cardinality-is-key/
+		metricsBaseLabels.feed_digest = scheduleFeedSha256[0]
+	}
 
 	const timeStarted = Date.now()
 	const differentialToFull = gtfsRtDifferentialToFullDataset({
@@ -189,18 +218,28 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 	const updateFeed = throttle(() => {
 		feed = differentialToFull.asFeedMessage()
 		timeModified = new Date()
-		feedSize.set({compression: 'none'}, feed.length)
-		feedEntitiesTotal.set(differentialToFull.nrOfEntities())
+		feedSize.set({
+			...metricsBaseLabels,
+			compression: 'none',
+		}, feed.length)
+		feedEntitiesTotal.set({
+			...metricsBaseLabels,
+		}, differentialToFull.nrOfEntities())
 		etag = computeEtag(feed) // todo: add computation time as metric
 	}, 100)
 	differentialToFull.on('change', updateFeed)
 	setImmediate(updateFeed)
 
 	const onFeedCompressed = (compression, compressedFeed, _) => {
-		feedSize.set({compression}, compressedFeed.length)
+		feedSize.set({
+			...metricsBaseLabels,
+			compression,
+		}, compressedFeed.length)
 	}
 	const respondWithFeed = (req, res) => {
-		feedRequestsTotal.inc()
+		feedRequestsTotal.inc({
+			...metricsBaseLabels,
+		})
 
 		// https://protobuf.dev/reference/protobuf/mime-types/
 		// > When binary protos are transacted over HTTP, Protobuf strongly recommends […] setting `X-Content-Type-Options: nosniff` to prevent XSS, as it is possible for a Protobuf to parse as active content.
@@ -301,19 +340,25 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 			const topic_root = (topic.split('.')[0] || '').slice(0, 7)
 			const redelivered = msg.info.redelivered ? '1' : '0'
 			natsNrOfMessagesReceivedTotal.inc({
+				...metricsBaseLabels,
 				stream, // name of the JetStream stream
 				consumer, // name of the JetStream consumer
 				topic_root,
 				redelivered,
 			})
 			natsLatestMessageReceivedTimestampSeconds.set({
+				...metricsBaseLabels,
 				stream, // name of the JetStream stream
 				consumer, // name of the JetStream consumer
 				topic_root,
 				redelivered,
 			}, tReceived / 1000)
-			natsMsgSeq.set(seq)
-			receivedFromNatsTotal.inc()
+			natsMsgSeq.set({
+				...metricsBaseLabels,
+			}, seq)
+			receivedFromNatsTotal.inc({
+				...metricsBaseLabels,
+			})
 		}
 
 		const t0 = performance.now()
@@ -323,7 +368,9 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 
 		const processingTime = performance.now() - t0
 		msg.ack()
-		digestTime.observe(processingTime / 1000)
+		digestTime.observe({
+			...metricsBaseLabels,
+		}, processingTime / 1000)
 	}
 
 	{
