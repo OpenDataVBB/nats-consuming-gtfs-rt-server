@@ -185,7 +185,18 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 	}
 	const respondWithFeed = (req, res) => {
 		feedRequestsTotal.inc()
+
+		// https://protobuf.dev/reference/protobuf/mime-types/
+		// > When binary protos are transacted over HTTP, Protobuf strongly recommends […] setting `X-Content-Type-Options: nosniff` to prevent XSS, as it is possible for a Protobuf to parse as active content.
+		res.setHeader('X-Content-Type-Options', 'nosniff')
+
+		// https://protobuf.dev/reference/protobuf/mime-types/
+		// > So the standard MIME types for common protobuf encodings are:
+		// > - `application/protobuf` for serialized binary protos.
+		const contentType = 'application/protobuf'
+
 		serveBuffer(req, res, feed, {
+			contentType,
 			timeModified,
 			etag,
 			gzipMaxSize: 20 * 1024 * 1024, // 20mb
