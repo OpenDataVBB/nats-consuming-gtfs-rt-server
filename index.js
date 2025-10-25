@@ -1,6 +1,8 @@
-import {ok} from 'node:assert'
+import {ok, strictEqual} from 'node:assert'
 import {createServer} from 'node:http'
 import {Counter, Summary, Gauge} from 'prom-client'
+import _bs58 from 'bs58'
+const {encode: encodeBase58} = _bs58
 import {
 	gtfsRtDifferentialToFullDataset,
 } from 'gtfs-rt-differential-to-full-dataset'
@@ -8,6 +10,8 @@ import {performance} from 'node:perf_hooks'
 import throttle from 'lodash/throttle.js'
 import computeEtag from 'etag'
 import pick from 'lodash/pick.js'
+import _contentType from 'content-type'
+const {format: formatContentType} = _contentType
 import serveBuffer from 'serve-buffer'
 import {
 	asyncConsume,
@@ -50,12 +54,16 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 	ok(Number.isInteger(port), 'cfg.port must be an integer')
 
 	const {
+		scheduleFeedVersion,
+		scheduleFeedSha256,
 		natsOpts,
 		natsConsumerName,
 		// shiftTimesToEnsureGaps: shouldShiftTimesToEnsureGaps,
 		differentialEntitiesTtl,
 		t0,
 	} = {
+		scheduleFeedVersion: process.env.GTFS_FEED_VERSION || null,
+		scheduleFeedSha256: process.env.GTFS_FEED_DIGEST || null,
 		natsOpts: {},
 		natsConsumerName: process.env.GTFS_RT_CONSUMER_NAME
 			? process.env.GTFS_RT_CONSUMER_NAME
@@ -66,6 +74,14 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 			: 10 * 60 * 1000, // 10m
 		t0: Date.now() / 1000 | 0,
 		...opt,
+	}
+	if (scheduleFeedVersion !== null) {
+		strictEqual(typeof scheduleFeedVersion, 'string', 'opt.scheduleFeedVersion must be a string')
+		ok(scheduleFeedVersion, 'opt.scheduleFeedVersion must not be empty')
+	}
+	if (scheduleFeedSha256 !== null) {
+		strictEqual(typeof scheduleFeedSha256, 'string', 'opt.scheduleFeedSha256 must be a string')
+		ok(scheduleFeedSha256, 'opt.scheduleFeedSha256 must not be empty')
 	}
 	ok(Number.isInteger(differentialEntitiesTtl), 'opt.differentialEntitiesTtl must be an integer')
 	ok(Number.isInteger(t0), 'opt.t0 must be an integer')
@@ -141,7 +157,6 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 	})
 
 	const timeStarted = Date.now()
-	// todo: pass in feed metadata, see https://github.com/google/transit/pull/434
 	const differentialToFull = gtfsRtDifferentialToFullDataset({
 		ttl: differentialEntitiesTtl,
 		// todo: debug-log when entities have already expired while being added
@@ -150,6 +165,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 			return t0 + timePassed
 		},
 	})
+	differentialToFull.setFeedVersion(scheduleFeedVersion)
 
 	const processTripUpdate = (tripUpdate) => {
 		const feedEntity = {
@@ -190,10 +206,24 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		// > When binary protos are transacted over HTTP, Protobuf strongly recommends […] setting `X-Content-Type-Options: nosniff` to prevent XSS, as it is possible for a Protobuf to parse as active content.
 		res.setHeader('X-Content-Type-Options', 'nosniff')
 
-		// https://protobuf.dev/reference/protobuf/mime-types/
-		// > So the standard MIME types for common protobuf encodings are:
-		// > - `application/protobuf` for serialized binary protos.
-		const contentType = 'application/protobuf'
+		const contentTypeParams = {}
+		if (scheduleFeedVersion !== null) {
+			contentTypeParams.schedule_version = scheduleFeedVersion
+		}
+		if (scheduleFeedVersion !== null) {
+			const scheduleFeedVersionBase58 = encodeBase58(Buffer.from(scheduleFeedVersion, 'utf8'))
+			contentTypeParams.schedule_version_bs58 = scheduleFeedVersionBase58
+		}
+		if (scheduleFeedSha256 !== null) {
+			contentTypeParams.schedule_sha256 = scheduleFeedSha256
+		}
+		const contentType = formatContentType({
+			// https://protobuf.dev/reference/protobuf/mime-types/
+			// > So the standard MIME types for common protobuf encodings are:
+			// > - `application/protobuf` for serialized binary protos.
+			type: 'application/protobuf',
+			parameters: contentTypeParams,
+		})
 
 		serveBuffer(req, res, feed, {
 			contentType,
