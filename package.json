@@ -36,6 +36,7 @@
 		"node": ">=22"
 	},
 	"dependencies": {
+		"bs58": "^6.0.0",
 		"content-type": "^1.0.5",
 		"etag": "^1.8.1",
 		"gtfs-rt-differential-to-full-dataset": "^3.0.0-alpha.2",
