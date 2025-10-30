@@ -21,6 +21,7 @@ import {
 import {MAJOR_VERSION} from './lib/major-version.js'
 import {createLogger} from './lib/logger.js'
 import {createMetricsServer, register as metricsRegister} from './lib/metrics.js'
+import {negotiateFeedAggregator} from './lib/content-negotiation.js'
 import {connectToNats} from './lib/nats.js'
 
 // todo: DRY with OpenDataVBB/gtfs-rt-feed
@@ -327,18 +328,62 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		[defaultScheduleFeedVersion, _defaultFeedAggregator],
 	])
 
+	const getMatchingFeedAggregator = (scheduleFeedSha256, scheduleFeedVersion) => {
+		let feedAggregator = null
+		if (_feedAggregatorsByScheduleFeedSha256.has(scheduleFeedSha256)) {
+			feedAggregator = _feedAggregatorsByScheduleFeedSha256.get(scheduleFeedSha256)
+		} else if (_feedAggregatorsByScheduleFeedVersion.has(scheduleFeedVersion)) {
+			feedAggregator = _feedAggregatorsByScheduleFeedVersion.get(scheduleFeedVersion)
+		} else {
+			return null
+		}
+		if (scheduleFeedSha256 !== null && scheduleFeedSha256 !== feedAggregator.scheduleFeedSha256) {
+			return null
+		}
+		if (scheduleFeedVersion !== null && scheduleFeedVersion !== feedAggregator.scheduleFeedVersion) {
+			return null
+		}
+		return feedAggregator
+	}
+
 	const onFeedRequest = (req, res, logCtx) => {
 		logCtx = {
 			...logCtx,
 			timeModified: null, // set later
 			etag: null, // set later
+			scheduleFeedSha256: null, // set later
+			scheduleFeedVersion: null, // set later
 		}
 
-		// todo: content negotiation using scheduleFeedSha256 & scheduleFeedVersion
-		const feedAggregator = _defaultFeedAggregator
+		// content negotiation using scheduleFeedSha256 & scheduleFeedVersion
+		res.setHeader('Vary', 'Content-Type') // todo: is this enough?
+		const feedAggregator = negotiateFeedAggregator({
+			requestHeaders: req.headers,
+			defaultFeedAggregator: getMatchingFeedAggregator(defaultScheduleFeedSha256, defaultScheduleFeedVersion),
+			getMatchingFeedAggregator,
+		})
+		if (feedAggregator === null) { // no match!
+			logger.trace(logCtx, 'content-type not acceptable, responding with list of feed aggregators')
+			// todo: add metric?
+			res.statusCode = 406 // Not Acceptable
+			res.contentType = 'application/json'
+			const feedAggregators = Array.from(new Set([
+				..._feedAggregatorsByScheduleFeedSha256.values(),
+				..._feedAggregatorsByScheduleFeedVersion.values(),
+			]))
+				.map((feedAggregator) => ({
+					schedule_sha256: feedAggregator.scheduleFeedSha256,
+					schedule_version: feedAggregator.scheduleFeedVersion,
+					schedule_version_bs58: feedAggregator.scheduleFeedVersionBase58,
+				}))
+			res.end(JSON.stringify(feedAggregators))
+			return;
+		}
 
 		logCtx.timeModified = feedAggregator.getTimeModified()
 		logCtx.etag = feedAggregator.getEtag()
+		logCtx.scheduleFeedSha256 = feedAggregator.scheduleFeedSha256
+		logCtx.scheduleFeedVersion = feedAggregator.scheduleFeedVersion
 
 		logger.trace(logCtx, 'serving feed')
 		feedAggregator.respondWithFeed(req, res)
