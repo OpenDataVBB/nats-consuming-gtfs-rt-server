@@ -22,6 +22,7 @@ import {MAJOR_VERSION} from './lib/major-version.js'
 import {createLogger} from './lib/logger.js'
 import {createMetricsServer, register as metricsRegister} from './lib/metrics.js'
 import {negotiateFeedAggregator} from './lib/content-negotiation.js'
+import {parseNatsMsgSubject} from './lib/gtfs-rt-mqtt-topics.js'
 import {connectToNats} from './lib/nats.js'
 
 // todo: DRY with OpenDataVBB/gtfs-rt-feed
@@ -79,6 +80,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		scheduleFeedSha256: defaultScheduleFeedSha256,
 		natsOpts,
 		natsConsumerName,
+		natsConsumerMaxPullBatch,
 		// shiftTimesToEnsureGaps: shouldShiftTimesToEnsureGaps,
 		differentialEntitiesTtl,
 		t0,
@@ -91,6 +93,9 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		natsConsumerName: process.env.GTFS_RT_CONSUMER_NAME
 			? process.env.GTFS_RT_CONSUMER_NAME
 			: 'nats-consuming-gtfs-rt-server',
+		natsConsumerMaxPullBatch: process.env.GTFS_RT_CONSUMER_MAX_PULL_BATCH
+			? parseInt(process.env.GTFS_RT_CONSUMER_MAX_PULL_BATCH)
+			: null,
 		// shiftTimesToEnsureGaps: false,
 		differentialEntitiesTtl: process.env.GTFS_RT_DIFFERENTIAL_ENTITIES_TTL
 			? process.env.GTFS_RT_DIFFERENTIAL_ENTITIES_TTL
@@ -328,6 +333,55 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		[defaultScheduleFeedVersion, _defaultFeedAggregator],
 	])
 
+	const addFeedAggregator = (scheduleFeedSha256, scheduleFeedVersion) => {
+		logger.info({
+			scheduleFeedSha256,
+			scheduleFeedVersion,
+		}, 'creating new feed aggregator')
+		const feedAggregator = _createScheduleFeedAggregator({
+			scheduleFeedSha256,
+			scheduleFeedVersion,
+		})
+		if (scheduleFeedSha256 !== null) {
+			_feedAggregatorsByScheduleFeedSha256.set(scheduleFeedSha256, feedAggregator)
+		}
+		if (scheduleFeedVersion !== null) {
+			_feedAggregatorsByScheduleFeedVersion.set(scheduleFeedVersion, feedAggregator)
+		}
+		return feedAggregator
+	}
+
+	const feedAggregatorsTtl = differentialEntitiesTtl // todo: pick a different one?
+	const _feedAggregatorsGCInterval = Math.min(10_000, Math.round(feedAggregatorsTtl / 10))
+	const garbageCollectFeedAggregators = () => {
+		logger.debug('garbage-collecting feed aggregators')
+		const feedAggregators = new Set([
+			..._feedAggregatorsByScheduleFeedSha256.values(),
+			..._feedAggregatorsByScheduleFeedVersion.values(),
+		])
+		const now = Date.now() // todo: use _getTimestamp()
+		for (const feedAggregator of feedAggregators) {
+			if ((now - feedAggregator.getTimeModified()) <= feedAggregatorsTtl) {
+				continue
+			}
+			if (feedAggregator.scheduleFeedSha256 === null && feedAggregator.scheduleFeedVersion === null) {
+				continue
+			}
+
+			logger.info({
+				scheduleFeedSha256: feedAggregator.scheduleFeedSha256,
+				scheduleFeedVersion: feedAggregator.scheduleFeedVersion,
+			}, 'garbage-collecting feed aggregator')
+			if (feedAggregator.scheduleFeedSha256 !== null) {
+				_feedAggregatorsByScheduleFeedSha256.delete(feedAggregator.scheduleFeedSha256)
+			}
+			if (feedAggregator.scheduleFeedVersion !== null) {
+				_feedAggregatorsByScheduleFeedVersion.delete(feedAggregator.scheduleFeedVersion)
+			}
+		}
+	}
+	const _feedAggregatorsGCTimer = setInterval(garbageCollectFeedAggregators, _feedAggregatorsGCInterval).unref()
+
 	const getMatchingFeedAggregator = (scheduleFeedSha256, scheduleFeedVersion) => {
 		let feedAggregator = null
 		if (_feedAggregatorsByScheduleFeedSha256.has(scheduleFeedSha256)) {
@@ -446,17 +500,39 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		} = msg.info
 		// todo: trace-log msg
 
-		// todo: support a *set* of versions, dynamically deduce them from NATS topics?
-		// todo: reconfigure set of GTFS-RT feeds based on topic
-		const feedAggregator = _defaultFeedAggregator
+		const _subject = parseNatsMsgSubject(subject)
+		const {
+			root: subjectRoot,
+		} = _subject
+		const scheduleFeedSha256 = _subject.scheduleFeedSha256 ?? defaultScheduleFeedSha256
+		const scheduleFeedVersion = _subject.scheduleFeedVersion ?? defaultScheduleFeedVersion
+
+		// todo: DRY with getMatchingFeedAggregator()
+		let feedAggregator = null
+		if (scheduleFeedSha256 === null && scheduleFeedVersion === null) {
+			feedAggregator = _defaultFeedAggregator
+		} else if (scheduleFeedSha256 !== null && _feedAggregatorsByScheduleFeedSha256.has(scheduleFeedSha256)) {
+			feedAggregator = _feedAggregatorsByScheduleFeedSha256.get(scheduleFeedSha256)
+			if (scheduleFeedVersion !== null && scheduleFeedVersion !== feedAggregator.scheduleFeedVersion) {
+				return null
+			}
+		} else if (scheduleFeedVersion !== null && _feedAggregatorsByScheduleFeedVersion.has(scheduleFeedVersion)) {
+			feedAggregator = _feedAggregatorsByScheduleFeedVersion.get(scheduleFeedVersion)
+			if (scheduleFeedSha256 !== null && scheduleFeedSha256 !== feedAggregator.scheduleFeedSha256) {
+				return null
+			}
+		} else {
+			feedAggregator = addFeedAggregator(scheduleFeedSha256, scheduleFeedVersion)
+		}
 
 		// update NATS metrics
 		const {
 			metricsLabels,
 		} = feedAggregator
 		{
+			// todo [breaking]: switch to "subject_root" to align with NATS terminology
 			// We slice() to keep the cardinality low in case of a bug.
-			const topic_root = (subject.split('.')[0] || '').slice(0, 7)
+			const topic_root = subjectRoot.slice(0, 7)
 			const redelivered = msg.info.redelivered ? '1' : '0'
 			natsNrOfMessagesReceivedTotal.inc({
 				...metricsLabels,
@@ -509,15 +585,20 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 			natsConsumerName,
 		)
 
+		// query details of the (externally created) NATS JetStream consumer
+		const consumerInfo = await gtfsRtConsumer.info()
 		{
-			// query details of the (externally created) NATS JetStream consumer
-			const consumerInfo = await gtfsRtConsumer.info()
 			logger.debug({
 				consumerInfo,
 			}, 'using NATS JetStream consumer')
 		}
 
-		const gtfsRtSub = await gtfsRtConsumer.consume()
+		const gtfsRtSub = await gtfsRtConsumer.consume({
+			max_messages: (natsConsumerMaxPullBatch !== null
+				? natsConsumerMaxPullBatch
+				: consumerInfo.config.max_batch ?? 100
+			),
+		})
 		execPipe(
 			gtfsRtSub,
 			asyncMap(onNatsMsg),
@@ -538,6 +619,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		metricsServer.close()
 		await natsClient.close()
 		httpServer.close()
+		clearInterval(_feedAggregatorsGCTimer)
 	}
 
 	return {
