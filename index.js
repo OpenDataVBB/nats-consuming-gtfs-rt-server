@@ -10,8 +10,6 @@ import {performance} from 'node:perf_hooks'
 import throttle from 'lodash/throttle.js'
 import computeEtag from 'etag'
 import pick from 'lodash/pick.js'
-import _contentType from 'content-type'
-const {format: formatContentType} = _contentType
 import serveBuffer from 'serve-buffer'
 import {
 	asyncConsume,
@@ -21,7 +19,10 @@ import {
 import {MAJOR_VERSION} from './lib/major-version.js'
 import {createLogger} from './lib/logger.js'
 import {createMetricsServer, register as metricsRegister} from './lib/metrics.js'
-import {negotiateFeedAggregator} from './lib/content-negotiation.js'
+import {
+	formatFeedContentType,
+	negotiateFeedAggregator,
+} from './lib/content-negotiation.js'
 import {parseNatsMsgSubject} from './lib/gtfs-rt-mqtt-topics.js'
 import {connectToNats} from './lib/nats.js'
 
@@ -34,26 +35,6 @@ const NATS_JETSTREAM_GTFSRT_STREAM_NAME = `GTFS_RT_${MAJOR_VERSION}`
 // > }
 // https://gtfs.org/documentation/realtime/proto/
 const INCREMENTALITY_DIFFERENTIAL = 1
-
-const formatFeedContentType = (scheduleFeedSha256, scheduleFeedVersion, scheduleFeedVersionBase58) => {
-	const params = {}
-	if (scheduleFeedSha256 !== null) {
-		params.schedule_sha256 = scheduleFeedSha256
-	}
-	if (scheduleFeedVersion !== null) {
-		params.schedule_version = scheduleFeedVersion
-	}
-	if (scheduleFeedVersionBase58 !== null) {
-		params.schedule_version_bs58 = scheduleFeedVersionBase58
-	}
-	return formatContentType({
-		// https://protobuf.dev/reference/protobuf/mime-types/
-		// > So the standard MIME types for common protobuf encodings are:
-		// > - `application/protobuf` for serialized binary protos.
-		type: 'application/protobuf',
-		parameters: params,
-	})
-}
 
 const respondToHealthcheck = (req, res, isHealthy) => {
 	res.setHeader('cache-control', 'no-store')
@@ -218,6 +199,11 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 			scheduleFeedVersion,
 		} = cfg
 
+		let scheduleFeedVersionBase58 = null
+		if (scheduleFeedVersion !== null) {
+			scheduleFeedVersionBase58 = encodeBase58(Buffer.from(scheduleFeedVersion, 'utf8'))
+		}
+
 		const metricsLabels = {}
 		if (scheduleFeedSha256 !== null) {
 			// Note: Prometheus stores time series per combination of label values, so having labels with a high or even unbound cardinality is a problem. We still want to be able to tell the schedule databases' metrics apart in the monitoring system, so we add the first hex digit (with a cardinality of 16) of the GTFS Schedule feed's hash as a label.
@@ -225,10 +211,6 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 			metricsLabels.feed_digest = scheduleFeedSha256[0]
 		}
 
-		let scheduleFeedVersionBase58 = null
-		if (scheduleFeedVersion !== null) {
-			scheduleFeedVersionBase58 = encodeBase58(Buffer.from(scheduleFeedVersion, 'utf8'))
-		}
 		const contentType = formatFeedContentType(scheduleFeedSha256, scheduleFeedVersion, scheduleFeedVersionBase58)
 
 		const differentialToFull = gtfsRtDifferentialToFullDataset({
@@ -310,6 +292,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		return {
 			scheduleFeedSha256,
 			scheduleFeedVersion,
+			scheduleFeedVersionBase58,
 			metricsLabels,
 			getTimeModified: () => timeModified,
 			getEtag: () => etag,
