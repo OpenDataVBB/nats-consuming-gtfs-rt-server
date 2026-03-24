@@ -11,6 +11,7 @@ import throttle from 'lodash/throttle.js'
 import computeEtag from 'etag'
 import pick from 'lodash/pick.js'
 import serveBuffer from 'serve-buffer'
+import maxBy from 'lodash/maxBy.js'
 import {
 	asyncConsume,
 	execPipe,
@@ -315,6 +316,8 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 	const _feedAggregatorsByScheduleFeedVersion = new Map([ // scheduleFeedVersion -> feedAggregator
 		[defaultScheduleFeedVersion, _defaultFeedAggregator],
 	])
+	let latestFeedAggregator = _defaultFeedAggregator
+	let _latestFeedAggregatorTimeModified = _defaultFeedAggregator.getTimeModified()
 
 	const addFeedAggregator = (scheduleFeedSha256, scheduleFeedVersion) => {
 		logger.info({
@@ -361,6 +364,13 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 			if (feedAggregator.scheduleFeedVersion !== null) {
 				_feedAggregatorsByScheduleFeedVersion.delete(feedAggregator.scheduleFeedVersion)
 			}
+			latestFeedAggregator = maxBy(
+				Array.from(new Set([
+					..._feedAggregatorsByScheduleFeedSha256,
+					..._feedAggregatorsByScheduleFeedVersion,
+				])),
+				feedAggregator => feedAggregator.getTimeModified(),
+			)
 		}
 	}
 	const _feedAggregatorsGCTimer = setInterval(garbageCollectFeedAggregators, _feedAggregatorsGCInterval).unref()
@@ -396,7 +406,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		res.setHeader('Vary', 'Content-Type') // todo: is this enough?
 		const feedAggregator = negotiateFeedAggregator({
 			requestHeaders: req.headers,
-			defaultFeedAggregator: getMatchingFeedAggregator(defaultScheduleFeedSha256, defaultScheduleFeedVersion),
+			defaultFeedAggregator: latestFeedAggregator,
 			getMatchingFeedAggregator,
 		})
 		if (feedAggregator === null) { // no match!
@@ -543,6 +553,15 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 
 		const tripUpdate = msg.json(msg.data)
 		feedAggregator.processTripUpdate(tripUpdate)
+
+		// keep track of latest feed aggregator
+		{
+			const _tM = feedAggregator.getTimeModified()
+			if (_tM > _latestFeedAggregatorTimeModified) {
+				_latestFeedAggregatorTimeModified = _tM
+				latestFeedAggregator = feedAggregator
+			}
+		}
 
 		const processingTime = performance.now() - t0
 		msg.ack()
