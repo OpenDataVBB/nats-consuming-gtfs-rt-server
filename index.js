@@ -10,7 +10,8 @@ import {performance} from 'node:perf_hooks'
 import throttle from 'lodash/throttle.js'
 import computeEtag from 'etag'
 import pick from 'lodash/pick.js'
-import serveBuffer from 'serve-buffer'
+import {promisify} from 'node:util'
+import _serveBuffer from 'serve-buffer'
 import maxBy from 'lodash/maxBy.js'
 import {
 	asyncConsume,
@@ -50,6 +51,8 @@ const respondToHealthcheck = (req, res, isHealthy) => {
 		res.end('not healthy :(')
 	}
 }
+
+const serveBuffer = promisify(_serveBuffer)
 
 const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 	const {
@@ -267,7 +270,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 				compression,
 			}, compressedFeed.length)
 		}
-		const respondWithFeed = (req, res) => {
+		const respondWithFeed = async (req, res) => {
 			feedRequestsTotal.inc({
 				...metricsLabels,
 			})
@@ -277,7 +280,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 			// > When binary protos are transacted over HTTP, Protobuf strongly recommends […] setting `X-Content-Type-Options: nosniff` to prevent XSS, as it is possible for a Protobuf to parse as active content.
 			res.setHeader('X-Content-Type-Options', 'nosniff')
 
-			serveBuffer(req, res, feed, {
+			await serveBuffer(req, res, feed, {
 				contentType,
 				timeModified,
 				etag,
@@ -434,6 +437,19 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 
 		logger.trace(logCtx, 'serving feed')
 		feedAggregator.respondWithFeed(req, res)
+		.catch((err) => {
+			if (err.code === 'ERR_STREAM_UNABLE_TO_PIPE') {
+				logger.trace({
+					...logCtx,
+					err,
+				}, 'failed to serve GTFS-RT feed because connection to client is closed')
+				return;
+			}
+			logger.error({
+				...logCtx,
+				err,
+			}, 'failed to serve GTFS-RT feed')
+		})
 	}
 
 	const onHttpRequest = (req, res) => {
