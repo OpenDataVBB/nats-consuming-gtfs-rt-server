@@ -367,14 +367,14 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 			if (feedAggregator.scheduleFeedVersion !== null) {
 				_feedAggregatorsByScheduleFeedVersion.delete(feedAggregator.scheduleFeedVersion)
 			}
-			latestFeedAggregator = maxBy(
-				Array.from(new Set([
-					..._feedAggregatorsByScheduleFeedSha256,
-					..._feedAggregatorsByScheduleFeedVersion,
-				])),
-				feedAggregator => feedAggregator.getTimeModified(),
-			)
 		}
+		latestFeedAggregator = maxBy(
+			Array.from(new Set([
+				..._feedAggregatorsByScheduleFeedSha256.values(),
+				..._feedAggregatorsByScheduleFeedVersion.values(),
+			])),
+			feedAggregator => feedAggregator.getTimeModified(),
+		)
 	}
 	const _feedAggregatorsGCTimer = setInterval(garbageCollectFeedAggregators, _feedAggregatorsGCInterval).unref()
 
