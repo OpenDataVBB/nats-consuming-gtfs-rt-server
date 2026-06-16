@@ -4,6 +4,7 @@
 FROM node:22-alpine as builder
 WORKDIR /app
 
+ADD package.json /app
 RUN npm install --production
 
 # ---
