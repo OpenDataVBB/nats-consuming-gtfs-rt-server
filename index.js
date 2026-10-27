@@ -10,8 +10,7 @@ import {performance} from 'node:perf_hooks'
 import throttle from 'lodash/throttle.js'
 import computeEtag from 'etag'
 import pick from 'lodash/pick.js'
-import {promisify} from 'node:util'
-import _serveBuffer from 'serve-buffer'
+import serveBuffer from 'serve-buffer'
 import maxBy from 'lodash/maxBy.js'
 import {
 	asyncConsume,
@@ -51,8 +50,6 @@ const respondToHealthcheck = (req, res, isHealthy) => {
 		res.end('not healthy :(')
 	}
 }
-
-const serveBuffer = promisify(_serveBuffer)
 
 const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 	const {
@@ -187,7 +184,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		registers: [metricsRegister],
 		labelNames: [
 			'feed_digest', // first byte of the SHA256 digest
-			// todo: by compression method?
+			'compression',
 		],
 	})
 
@@ -264,16 +261,16 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 		differentialToFull.on('change', updateFeed)
 		setImmediate(updateFeed)
 
-		const onFeedCompressed = (compression, compressedFeed, _) => {
-			feedSize.set({
+		const onBeforeSend = (req, res, feed, opt, negotiatedState) => {
+			const _labels = {
 				...metricsLabels,
-				compression,
-			}, compressedFeed.length)
+				compression: negotiatedState.encoding ?? 'none',
+			}
+			// todo: is setting this metric on every request too inefficient?
+			feedSize.set(_labels, feed.length)
+			feedRequestsTotal.inc(_labels)
 		}
 		const respondWithFeed = async (req, res) => {
-			feedRequestsTotal.inc({
-				...metricsLabels,
-			})
 			// todo: set Link header with license?
 
 			// https://protobuf.dev/reference/protobuf/mime-types/
@@ -289,7 +286,7 @@ const serveGtfsRtDataFromNats = async (cfg, opt = {}) => {
 				zstdCompress: true,
 				zstdCompressMaxSize: 50 * 1024 * 1024, // 50mb
 				unmutatedBuffers: true,
-				onCompressed: onFeedCompressed,
+				beforeSend: onBeforeSend,
 			})
 		}
 
